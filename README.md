@@ -38,6 +38,10 @@ Dark frames (the camera warming up, lights off) are ignored, so the room picture
 
 If Meet has the camera open more than once (e.g. preview + call), the popup shows each stream's size. Each stream gets its own outline and room picture; captures apply to all of them.
 
+Turning your camera off and on (or Meet changing resolution) keeps the captured room, and if you were vanished you stay vanished, with no dust replay.
+
+**Others in frame:** by default only you vanish: the largest person in view (on a webcam, whoever is nearest), plus anything touching you, such as a raised hand. Anyone else stays visible. Two people touching or overlapping in the picture count as one. Settings → "Who vanishes" → "Everyone in frame" changes this.
+
 Without a capture, SnapDust still learns the room as you move around. The popup shows how much of the room it has seen ("% known"); any part it has never seen without you in front is filled with a blur of the surrounding room.
 
 **Settings (in the popup):** "Show detection outline" tints what the model thinks is you, which is useful for checking detection in your lighting. "Flip my video for others" mirrors what other people see.
@@ -51,7 +55,9 @@ Snap your fingers to vanish; snap again to come back. Settings are in the popup.
 - **Hand only**: no microphone needed.
 - **Sensitivity**: how far above the room's noise a click must jump (24 dB at the low end, 12 dB at the high end).
 
-The popup shows what it hears ("Last click: snap-like ✓ / too dull / too long") and whether your hand is in view, to help tune it.
+In "sound + hand", a snap sound counts if your hand was in snap pose (thumb and middle finger pressed together) within the second before, or was seen snapping apart. The snap itself is often a blur on camera; the pose before it isn't.
+
+The popup shows what it hears ("Last click: snap-like ✓ / too dull / too long / too quiet") and whether your hand is in view. If snaps are missed, **Copy snap log** copies the last 40 sounds, hand poses and decisions (with why each snap was or wasn't accepted) plus Meet's mic processing settings.
 
 To hear snaps while you're muted in Meet, SnapDust listens to its own copy of Meet's mic, so your Mac's mic indicator may stay on while muted. Nothing is recorded or sent anywhere. If Meet closes the mic, SnapDust lets go too and "sound + hand" falls back to the hand alone.
 

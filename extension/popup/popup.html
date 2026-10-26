@@ -34,6 +34,7 @@
         <input type="range" id="snapSensitivity" min="0" max="1" step="0.05" />
       </label>
       <div id="snapStatus" class="hint"></div>
+      <button id="copySnapLog" class="link">Copy snap log</button>
     </section>
 
     <details>
@@ -42,6 +43,14 @@
       <label class="row">
         <input type="checkbox" id="enabled" />
         Process my camera
+      </label>
+
+      <label class="row">
+        Who vanishes
+        <select id="vanishWho">
+          <option value="me">Just me</option>
+          <option value="everyone">Everyone in frame</option>
+        </select>
       </label>
 
       <label class="row">

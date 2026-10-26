@@ -37,6 +37,7 @@
     snapEnabled: true,
     snapMode: 'both', // both | sound | hand
     snapSensitivity: 0.5,
+    vanishWho: 'me', // me | everyone
     segmenterUrl: null,
   };
 
@@ -192,12 +193,16 @@
   const HAND_EVERY = 2; // video frames between hand checks (~15 per second)
   const { SoundSnapDetector, HandSnapDetector, SnapFusion } = window.__SnapDustSnap;
 
+  const SNAP_LOG_SIZE = 40;
   const snap = {
     audioTrack: null, // our copy of Meet's mic track
     sound: null, // SoundSnapDetector, created at the mic's sample rate
     samples: null,
-    hand: new HandSnapDetector({ onEvent: (e) => snap.fusion.hand(e) }),
-    fusion: new SnapFusion({ mode: 'both', onSnap: onSnap }),
+    hand: new HandSnapDetector({ onEvent: onHandEvent }),
+    fusion: new SnapFusion({ mode: 'both', onSnap: onSnap, onDecision: (d) => snapLog('decision', d) }),
+    log: [], // recent sounds, hand poses and decisions, for "Copy snap log" in the popup
+    inPose: false,
+    handVisible: false,
     handsBusySince: 0,
     handsSentAt: 0,
     handsModel: 'off', // off | loading | ready | error
@@ -205,6 +210,17 @@
     lastSnap: null,
     count: 0,
   };
+
+  function snapLog(kind, event) {
+    const { time, wall, ...rest } = event;
+    snap.log.push({ at: new Date().toISOString().slice(11, 23), kind, ...rest });
+    if (snap.log.length > SNAP_LOG_SIZE) snap.log.shift();
+  }
+
+  function onHandEvent(event) {
+    if (event.type === 'release') snapLog('hand', { result: 'snapped apart', gap: event.gap });
+    snap.fusion.hand(event);
+  }
 
   function onSnap(event) {
     state.vanished = !state.vanished;
@@ -264,6 +280,8 @@
       snap.sound = new SoundSnapDetector(data.sampleRate, {
         onEvent: (e) => {
           snap.lastSound = { ...e, wall: Date.now() };
+          const { verdict, jumpDb, brightness, durationMs } = e;
+          snapLog('sound', { verdict, jumpDb, brightness, durationMs });
           snap.fusion.sound(e);
         },
       });
@@ -309,6 +327,15 @@
     if (msg.hands.length) snap.handSeenAt = performance.now();
     snap.fusion.mode = snapMode();
     snap.hand.process(msg.hands, snap.handsSentAt);
+    // Log changes only: hand coming into / out of view, entering / leaving the snap pose.
+    const visible = msg.hands.length > 0;
+    if (visible !== snap.handVisible) snapLog('hand', { result: visible ? 'in view' : 'out of view' });
+    snap.handVisible = visible;
+    const inPose = snap.hand.lastPinch === snap.handsSentAt;
+    if (inPose !== snap.inPose && visible) {
+      snapLog('hand', { result: inPose ? 'snap pose' : 'left snap pose', closestGap: snap.hand.closestGap });
+    }
+    snap.inPose = inPose;
   }
 
   // ---- Compositor ----------------------------------------------------------------
@@ -354,7 +381,73 @@
     return grown;
   }
 
+  // The room picture of the last stream that closed, for the next one to pick up.
+  let roomMemory = null;
+
   // Effect timeline per stream: present -> dusting -> gone -> returning -> present.
+  // The detector outlines everyone in frame. Keeps only you: the largest person (on a webcam,
+  // whoever is nearest), sticking with the one already tracked unless someone else is clearly
+  // bigger, so it doesn't flicker between two people. Blobs touching you count as you too,
+  // such as a raised hand the detector sees as a separate piece. Everyone else is left alone
+  // and treated as part of the room. Works in place on the mask's alpha; returns your pixels.
+  const NEARBY = 8; // pixels at segmentation size: blobs this close to you count as you
+  const SWITCH_RATIO = 1.3; // someone must be this much bigger to take over from the tracked person
+  function keepMainPerson(mask, previous) {
+    const { width, height, data } = mask;
+    const count = width * height;
+    const labels = new Int32Array(count); // 0 = background
+    const areas = [0];
+    const overlaps = [0];
+    const stack = [];
+    let next = 1;
+    for (let start = 0; start < count; start++) {
+      if (labels[start] || data[start * 4 + 3] <= MASK_THRESHOLD) continue;
+      let area = 0;
+      let overlap = 0;
+      labels[start] = next;
+      stack.push(start);
+      while (stack.length) {
+        const i = stack.pop();
+        area++;
+        if (previous?.[i]) overlap++;
+        const x = i % width;
+        for (const j of [i - width, i + width, x > 0 ? i - 1 : -1, x < width - 1 ? i + 1 : -1]) {
+          if (j < 0 || j >= count || labels[j] || data[j * 4 + 3] <= MASK_THRESHOLD) continue;
+          labels[j] = next;
+          stack.push(j);
+        }
+      }
+      areas.push(area);
+      overlaps.push(overlap);
+      next++;
+    }
+    if (next === 1) return null; // nobody in frame
+
+    let largest = 1;
+    let tracked = 0;
+    for (let l = 1; l < next; l++) {
+      if (areas[l] > areas[largest]) largest = l;
+      if (overlaps[l] > (overlaps[tracked] ?? 0)) tracked = l;
+    }
+    const main = tracked && areas[tracked] * SWITCH_RATIO >= areas[largest] ? tracked : largest;
+
+    // Blobs touching the area around you are part of you too.
+    const mainRgba = new Uint8ClampedArray(count * 4);
+    for (let i = 0; i < count; i++) mainRgba[i * 4 + 3] = labels[i] === main ? 255 : 0;
+    const near = growMask(mainRgba, width, height, NEARBY, 127);
+    const keep = new Uint8Array(next);
+    keep[main] = 1;
+    for (let i = 0; i < count; i++) if (labels[i] && near[i]) keep[labels[i]] = 1;
+
+    const you = new Uint8Array(count);
+    for (let i = 0; i < count; i++) {
+      const l = labels[i];
+      if (l && !keep[l]) data[i * 4 + 3] = 0;
+      else if (l) you[i] = 1;
+    }
+    return you;
+  }
+
   class Compositor {
     constructor() {
       this.width = 0;
@@ -365,13 +458,15 @@
       this.capture = null; // { startAt, endAt } in performance.now() time
       this.background = 'none'; // none | learning | capturing | captured
       this.maskLagFrames = 0;
-      this.phase = 'present'; // present | dusting | gone | returning
+      // A stream opened while you're vanished (camera toggled off and on) starts out gone.
+      this.phase = state.vanished ? 'gone' : 'present'; // present | dusting | gone | returning
       this.phaseStart = 0;
-      this.fadeAmount = 0; // only used when WebGL is unavailable
+      this.fadeAmount = state.vanished ? 1 : 0; // only eases in and out when WebGL is unavailable
       this.renderer = undefined; // created on first use; null if WebGL2 is unavailable
     }
 
     resize(width, height) {
+      const previous = this.width ? this.roomShape : null; // Meet changed this stream's size
       this.width = width;
       this.height = height;
       this.generation++;
@@ -401,6 +496,7 @@
       this.renderer?.resize(width, height);
       this.newMask = null;
       this.latestMask = null;
+      this.mainPerson = null;
       this.prevGrown = null;
       this.gain = 1;
       this.luma = 0;
@@ -408,7 +504,44 @@
       this.plateReady = false;
       this.captured = false;
       this.useFilled = false;
+      this.adopted = false;
       this.background = 'none';
+      this.adoptRoom(previous);
+    }
+
+    // When Meet reopens the camera (video off and on, a resolution change), the new stream
+    // takes over the room picture from a stream still open or the one that just closed.
+    adoptRoom(previous) {
+      const aspect = this.width / this.height;
+      const sameShape = (c) => c && Math.abs(c.aspect - aspect) < 0.02;
+      const donor = [...compositors].find((c) => c !== this && sameShape(c.roomShape));
+      const room = [previous, donor?.roomShape, roomMemory].find(sameShape) ?? null;
+      if (!room) return;
+      this.plateCtx.drawImage(room.plate, 0, 0, this.width, this.height);
+      this.coverageCtx.drawImage(room.coverage, 0, 0, this.coverage.width, this.coverage.height);
+      this.plateReady = true;
+      this.adopted = true;
+      this.captured = room.captured;
+      this.gain = room.gain;
+      this.background = room.captured ? 'captured' : 'learning';
+    }
+
+    // What another stream needs to take over this one's room picture.
+    get roomShape() {
+      if (!this.plateReady) return null;
+      return {
+        plate: this.plate,
+        coverage: this.coverage,
+        captured: this.captured,
+        gain: this.gain,
+        aspect: this.width / this.height,
+      };
+    }
+
+    dispose() {
+      if (this.plateReady) roomMemory = this.roomShape;
+      this.renderer?.dispose();
+      this.renderer = null;
     }
 
     startCapture(now) {
@@ -458,6 +591,7 @@
       const mask = this.newMask;
       if (!mask) return;
       this.newMask = null;
+      if (config.vanishWho !== 'everyone') this.mainPerson = keepMainPerson(mask, this.mainPerson);
       this.latestMask = mask;
       this.maskLagFrames = this.frameNo - this.newMaskFrame;
       const { width: mw, height: mh, data } = mask;
@@ -491,7 +625,9 @@
       ctx.filter = 'none';
       // The blur fades out at the frame's edges; the unblurred copy keeps those fully covered.
       ctx.drawImage(this.mask, 0, 0, this.width, this.height);
+      const firstMask = !this.maskReady;
       this.maskReady = true;
+      if (firstMask && this.plateReady) this.updateFill();
 
       // Track which parts of the room have been seen, for a while, without you in front.
       if (!this.roomVisible) return;
@@ -765,8 +901,14 @@
       ctx.filter = FILTERS[config.effect] ?? 'none';
       ctx.drawImage(this.frame, 0, 0);
 
-      // 1. Hide the live you behind the room picture.
-      if (this.fadeAmount > 0 && this.plateReady) {
+      // 1. Hide the live you behind the room picture. Until the first outline arrives, only a
+      // room picture known to be empty (captured, or taken over from the previous stream) is
+      // shown in full; otherwise the frame is blurred so you can't be seen in the meantime.
+      if (this.fadeAmount > 0 && !this.maskReady && !(this.captured || this.adopted)) {
+        ctx.filter = 'blur(24px)';
+        ctx.drawImage(this.frame, 0, 0);
+        ctx.filter = FILTERS[config.effect] ?? 'none';
+      } else if (this.fadeAmount > 0 && this.plateReady) {
         const room = this.useFilled ? this.filled : this.plate;
         scratchCtx.globalCompositeOperation = 'copy';
         if (this.maskReady) {
@@ -784,9 +926,9 @@
 
       // 2. On top: the frozen you turning to dust, or the live you reforming.
       const progress = this.dustClock(now) / DUST_SECONDS;
-      if (this.phase === 'dusting') {
+      if (this.phase === 'dusting' && this.renderer) {
         ctx.drawImage(this.renderer.render('dust', progress, DUST_SECONDS), 0, 0);
-      } else if (this.phase === 'returning') {
+      } else if (this.phase === 'returning' && this.renderer) {
         this.renderer.setBody(this.frame);
         this.renderer.setMask(this.rawMask);
         ctx.drawImage(this.renderer.render('return', progress, DUST_SECONDS), 0, 0);
@@ -865,6 +1007,16 @@
       lastSound: snap.lastSound && { ...snap.lastSound, secondsAgo: Math.round((Date.now() - snap.lastSound.wall) / 1000) },
       lastSnap: snap.lastSnap && { by: snap.lastSnap.by, secondsAgo: Math.round((Date.now() - snap.lastSnap.wall) / 1000) },
       count: snap.count,
+      // What Meet's mic processing is doing (noise suppression can soften clicks).
+      micSettings: (({ sampleRate, echoCancellation, noiseSuppression, autoGainControl } = {}) => ({
+        sampleRate,
+        echoCancellation,
+        noiseSuppression,
+        autoGainControl,
+      }))(snap.audioTrack?.getSettings?.()),
+      sensitivity: config.snapSensitivity,
+      configuredMode: config.snapMode,
+      log: snap.log,
     };
   }
 
@@ -963,6 +1115,8 @@
     outTrack.applyConstraints = (constraints) => inTrack.applyConstraints(constraints);
 
     const forget = () => {
+      if (!compositors.has(compositor)) return;
+      compositor.dispose();
       compositors.delete(compositor);
       if (activeCompositor === compositor) activeCompositor = [...compositors].pop() ?? null;
     };
