@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "SnapDust for Meet",
+  "version": "0.3.0",
+  "description": "Snap to turn to dust on your Google Meet video, and snap back to return.",
+  "permissions": [
+    "storage"
+  ],
+  "action": {
+    "default_title": "SnapDust",
+    "default_popup": "popup/popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "commands": {
+    "toggle-vanish": {
+      "suggested_key": {
+        "default": "Alt+Shift+V"
+      },
+      "description": "Vanish / reappear"
+    },
+    "capture-background": {
+      "suggested_key": {
+        "default": "Alt+Shift+B"
+      },
+      "description": "Capture the empty room (step out of frame)"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "content/dust.js",
+        "content/snap.js",
+        "content/inject.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://meet.google.com/*"
+      ],
+      "js": [
+        "content/bridge.js"
+      ],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "segmenter/*",
+        "vendor/mediapipe/*"
+      ],
+      "matches": [
+        "https://meet.google.com/*"
+      ]
+    }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}
