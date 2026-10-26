@@ -168,11 +168,19 @@ const READY = hand({ thumbTip: [0.47, 0.5], middleTip: [0.48, 0.48] }); // tips 
 const SNAPPED = hand({ thumbTip: [0.4, 0.46], middleTip: [0.5, 0.68] }); // middle finger on the palm
 const OPEN = hand({ thumbTip: [0.4, 0.55], middleTip: [0.5, 0.42] }); // relaxed, fingers up
 
+// The snap releases detected (ready-pose frames are reported too, but aren't snaps).
 function handEvents(frames, fps = 15) {
   const events = [];
   const d = new HandSnapDetector({ onEvent: (e) => events.push(e) });
   frames.forEach((f, i) => d.process(f ? [f] : [], (i * 1000) / fps));
-  return events;
+  return events.filter((e) => e.type === 'release');
+}
+
+function poseFrames(frames, fps = 15) {
+  const events = [];
+  const d = new HandSnapDetector({ onEvent: (e) => events.push(e) });
+  frames.forEach((f, i) => d.process(f ? [f] : [], (i * 1000) / fps));
+  return events.filter((e) => e.type === 'pose').length;
 }
 
 test('hand: thumb and middle finger together, then snapped apart', () => {
@@ -197,6 +205,14 @@ test('hand: no hand in view, nothing happens', () => {
   assert.equal(handEvents([null, null, null]).length, 0);
 });
 
+test('hand: the snap frame lost to motion blur is still caught a frame later', () => {
+  assert.equal(handEvents([READY, READY, null, SNAPPED]).length, 1);
+});
+
+test('hand: the ready pose is reported while held, not when relaxed', () => {
+  assert.equal(poseFrames([OPEN, READY, READY, READY, OPEN]), 3);
+});
+
 // ---- Combined -----------------------------------------------------------------------
 
 function fusion(mode) {
@@ -204,7 +220,8 @@ function fusion(mode) {
   return { f: new SnapFusion({ mode, onSnap: (s) => fired.push(s) }), fired };
 }
 const soundAt = (time) => ({ time, snap: true });
-const handAt = (time) => ({ time, snap: true });
+const handAt = (time) => ({ type: 'release', time, snap: true });
+const poseAt = (time) => ({ type: 'pose', time });
 
 test('both: sound and hand together fire once', () => {
   const { f, fired } = fusion('both');
@@ -218,6 +235,29 @@ test('both: hand seen first, sound a moment later, fires', () => {
   f.hand(handAt(1000));
   f.sound(soundAt(1150));
   assert.equal(fired.length, 1);
+});
+
+test('both: snap sound right after holding the ready pose fires, even with the snap frame missed', () => {
+  const { f, fired } = fusion('both');
+  f.hand(poseAt(800));
+  f.hand(poseAt(870));
+  f.sound(soundAt(1000));
+  assert.deepEqual(fired.map((s) => s.by), ['sound + ready pose']);
+});
+
+test('both: a ready pose from seconds ago does not count', () => {
+  const { f, fired } = fusion('both');
+  f.hand(poseAt(1000));
+  f.sound(soundAt(3500));
+  assert.equal(fired.length, 0);
+});
+
+test('both: a click with the hand in view but not in snap pose does nothing, and says why', () => {
+  const decisions = [];
+  const f = new SnapFusion({ mode: 'both', onDecision: (d) => decisions.push(d.result) });
+  f.sound(soundAt(1000));
+  assert.equal(f.snaps, 0);
+  assert.match(decisions[0], /not seen in snap pose/);
 });
 
 test('both: a sound alone (keyboard click) does nothing', () => {

@@ -20,6 +20,8 @@ const vanishBtn = document.getElementById('vanish');
 const captureBtn = document.getElementById('capture');
 const statusEl = document.getElementById('status');
 const snapStatusEl = document.getElementById('snapStatus');
+const copyLogBtn = document.getElementById('copySnapLog');
+let lastSnapInfo = null;
 let config = { ...DEFAULTS };
 
 let tabId = null;
@@ -81,6 +83,7 @@ const MODE_LABELS = { both: 'sound + hand', sound: 'sound only', hand: 'hand onl
 
 // What snap detection hears and sees right now, to help tune it.
 function renderSnap(snap) {
+  lastSnapInfo = snap;
   if (!snap) return (snapStatusEl.textContent = '');
   if (snap.mode === 'off') {
     snapStatusEl.textContent = controls.snapEnabled.checked
@@ -140,6 +143,15 @@ for (const el of Object.values(controls)) {
 }
 
 vanishBtn.addEventListener('click', () => command('toggle-vanish'));
+copyLogBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(JSON.stringify(lastSnapInfo, null, 2));
+    copyLogBtn.textContent = 'Copied ✓ — paste it to Claude';
+  } catch (err) {
+    copyLogBtn.textContent = `Could not copy: ${err.message}`;
+  }
+  setTimeout(() => (copyLogBtn.textContent = 'Copy snap log'), 2500);
+});
 captureBtn.addEventListener('click', () => command('capture-background'));
 
 await refreshStatus();

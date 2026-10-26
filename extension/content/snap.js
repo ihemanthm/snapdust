@@ -4,8 +4,9 @@
 // noise within a few milliseconds and dies away within ~50 ms. Speech, claps and knocks are
 // lower-pitched, slower to start or longer.
 //
-// Hand: just before a snap the thumb and middle fingertip press together; at the snap they fly
-// apart within a frame or two and the middle finger lands on the palm.
+// Hand: just before a snap the thumb and middle fingertip press together and the hand holds
+// still (the "ready pose", which tracks reliably); at the snap they fly apart within a frame or
+// two and the middle finger lands on the palm (a blur the tracker often misses).
 //
 // Loaded into the page before inject.js (window.__SnapDustSnap); also loadable in Node for tests.
 (function (root) {
@@ -96,8 +97,14 @@
       } else {
         const before = Math.max(this.history.at(-2)?.high ?? 0, this.history.at(-3)?.high ?? 0);
         const jump = db(high / this.floor);
-        // Sudden: well above the noise, and far above what was there 5 ms ago.
-        if (jump >= this.jumpDb && high > before * 8 && high > 1e-6) {
+        const sudden = high > before * 8 && high > 1e-6; // far above what was there 5 ms ago
+        // Sharp but not loud enough: reported (at most every 300 ms) so the log shows whether
+        // a higher sensitivity would have caught it.
+        if (sudden && jump < this.jumpDb && jump >= this.jumpDb - 10 && this.time - (this.lastQuiet ?? -1e9) > 300) {
+          this.lastQuiet = this.time;
+          this.onEvent({ time: this.time, snap: false, verdict: 'too quiet', jumpDb: Math.round(jump) });
+        }
+        if (jump >= this.jumpDb && sudden) {
           const recent = this.history.slice(0, -1);
           const mean = (key) => recent.reduce((sum, h) => sum + h[key], 0) / Math.max(1, recent.length);
           const baseHigh = mean('high');
@@ -149,40 +156,47 @@
   const MIDDLE_TIP = 12;
   const WRIST = 0;
   const MIDDLE_KNUCKLE = 9;
-  const PINCHED = 0.4; // thumb-middle tip gap, in hand sizes, when pressed together
-  const RELEASED = 0.7;
-  const RELEASE_WITHIN_MS = 250; // pressed -> apart this fast is a snap, slower is just letting go
+  const PINCHED = 0.5; // thumb-middle tip gap, in hand sizes, when pressed together (ready pose)
+  const RELEASED = 0.6;
+  const RELEASE_WITHIN_MS = 400; // pressed -> apart this fast is a snap, slower is just letting go
 
   const dist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 
   class HandSnapDetector {
+    // onEvent receives { type: 'pose', time, gap } for every frame in the ready pose, and
+    // { type: 'release', snap: true, time, gap } when the fingers snap apart.
     constructor({ onEvent } = {}) {
       this.onEvent = onEvent ?? (() => {});
       this.tracks = []; // per hand slot: { lastPinch, pinchTipToWrist }
       this.lastSeen = -Infinity;
       this.lastPinch = -Infinity;
+      this.closestGap = Infinity; // smallest thumb-middle gap in the latest frame, for the log
     }
 
     // hands: array of 21 [x, y] points per hand (image coordinates); timeMs: when the frame was taken.
     process(hands, timeMs) {
       if (hands.length) this.lastSeen = timeMs;
+      this.closestGap = Infinity;
       hands.forEach((points, i) => {
         const track = (this.tracks[i] ??= { lastPinch: -Infinity, pinchTipToWrist: 0 });
         const size = dist(points[WRIST], points[MIDDLE_KNUCKLE]);
         if (size < 1e-3) return;
         const gap = dist(points[THUMB_TIP], points[MIDDLE_TIP]) / size;
         const tipToWrist = dist(points[MIDDLE_TIP], points[WRIST]) / size;
+        const rounded = Math.round(gap * 100) / 100;
+        this.closestGap = Math.min(this.closestGap, rounded);
         if (gap < PINCHED) {
           track.lastPinch = timeMs;
           track.pinchTipToWrist = tipToWrist;
           this.lastPinch = timeMs;
+          this.onEvent({ type: 'pose', time: timeMs, gap: rounded });
         } else if (
           gap > RELEASED &&
           timeMs - track.lastPinch <= RELEASE_WITHIN_MS &&
-          tipToWrist < track.pinchTipToWrist * 0.9 // the middle finger came down, not up
+          tipToWrist < track.pinchTipToWrist // the middle finger came down, not up
         ) {
           track.lastPinch = -Infinity;
-          this.onEvent({ time: timeMs, snap: true, gap: Math.round(gap * 100) / 100 });
+          this.onEvent({ type: 'release', time: timeMs, snap: true, gap: rounded });
         }
       });
     }
@@ -190,16 +204,23 @@
 
   // ---- Combined -------------------------------------------------------------------
 
-  const MATCH_MS = 400; // sound and hand events this close together are the same snap
+  const MATCH_MS = 400; // a snap sound and the hand snapping apart this close together
+  const POSE_BEFORE_MS = 1000; // a snap sound counts if the hand was in the ready pose this recently
+  const POSE_AFTER_MS = 150; // (or within this after, for hand-tracking delay)
   const COOLDOWN_MS = 1200;
 
   // mode: 'both' (sound and hand must agree) | 'sound' | 'hand'.
+  // In 'both', a snap sound fires if the hand was seen snapping apart OR holding the ready pose
+  // just before: the snap itself is a blur the tracker often misses, the pose is not.
+  // onDecision (optional) reports every snap sound and what was made of it, for the log.
   class SnapFusion {
-    constructor({ mode = 'both', onSnap } = {}) {
+    constructor({ mode = 'both', onSnap, onDecision } = {}) {
       this.mode = mode;
       this.onSnap = onSnap ?? (() => {});
+      this.onDecision = onDecision ?? (() => {});
       this.lastSound = null;
-      this.lastHand = null;
+      this.lastRelease = null;
+      this.lastPose = -Infinity;
       this.lastFired = -Infinity;
       this.snaps = 0;
     }
@@ -207,15 +228,25 @@
     sound(event) {
       if (!event.snap) return;
       this.lastSound = event;
-      if (this.mode === 'sound') this.fire(event.time, 'sound');
-      else if (this.mode === 'both' && this.lastHand && Math.abs(this.lastHand.time - event.time) <= MATCH_MS) {
-        this.fire(event.time, 'sound + hand');
+      const t = event.time;
+      if (this.mode === 'sound') return this.fire(t, 'sound');
+      if (this.mode !== 'both') return;
+      if (this.lastRelease && Math.abs(this.lastRelease.time - t) <= MATCH_MS) {
+        return this.fire(t, 'sound + hand');
       }
+      if (this.lastPose >= t - POSE_BEFORE_MS && this.lastPose <= t + POSE_AFTER_MS) {
+        return this.fire(t, 'sound + ready pose');
+      }
+      this.onDecision({ time: t, result: 'ignored: hand not seen in snap pose' });
     }
 
     hand(event) {
+      if (event.type === 'pose') {
+        this.lastPose = event.time;
+        return;
+      }
       if (!event.snap) return;
-      this.lastHand = event;
+      this.lastRelease = event;
       if (this.mode === 'hand') this.fire(event.time, 'hand');
       else if (this.mode === 'both' && this.lastSound && Math.abs(this.lastSound.time - event.time) <= MATCH_MS) {
         this.fire(event.time, 'sound + hand');
@@ -223,10 +254,15 @@
     }
 
     fire(time, by) {
-      if (time - this.lastFired < COOLDOWN_MS) return;
+      if (time - this.lastFired < COOLDOWN_MS) {
+        this.onDecision({ time, result: `ignored: within ${COOLDOWN_MS / 1000}s of the last snap` });
+        return;
+      }
       this.lastFired = time;
-      this.lastSound = this.lastHand = null;
+      this.lastSound = this.lastRelease = null;
+      this.lastPose = -Infinity;
       this.snaps++;
+      this.onDecision({ time, result: `fired (${by})` });
       this.onSnap({ time, by });
     }
   }

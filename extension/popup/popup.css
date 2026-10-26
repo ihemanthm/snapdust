@@ -117,3 +117,14 @@ input[type='range'] {
   margin-left: auto;
   width: 120px;
 }
+
+button.link {
+  margin-top: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}

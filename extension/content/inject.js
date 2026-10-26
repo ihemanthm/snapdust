@@ -193,12 +193,16 @@
   const HAND_EVERY = 2; // video frames between hand checks (~15 per second)
   const { SoundSnapDetector, HandSnapDetector, SnapFusion } = window.__SnapDustSnap;
 
+  const SNAP_LOG_SIZE = 40;
   const snap = {
     audioTrack: null, // our copy of Meet's mic track
     sound: null, // SoundSnapDetector, created at the mic's sample rate
     samples: null,
-    hand: new HandSnapDetector({ onEvent: (e) => snap.fusion.hand(e) }),
-    fusion: new SnapFusion({ mode: 'both', onSnap: onSnap }),
+    hand: new HandSnapDetector({ onEvent: onHandEvent }),
+    fusion: new SnapFusion({ mode: 'both', onSnap: onSnap, onDecision: (d) => snapLog('decision', d) }),
+    log: [], // recent sounds, hand poses and decisions, for "Copy snap log" in the popup
+    inPose: false,
+    handVisible: false,
     handsBusySince: 0,
     handsSentAt: 0,
     handsModel: 'off', // off | loading | ready | error
@@ -206,6 +210,17 @@
     lastSnap: null,
     count: 0,
   };
+
+  function snapLog(kind, event) {
+    const { time, wall, ...rest } = event;
+    snap.log.push({ at: new Date().toISOString().slice(11, 23), kind, ...rest });
+    if (snap.log.length > SNAP_LOG_SIZE) snap.log.shift();
+  }
+
+  function onHandEvent(event) {
+    if (event.type === 'release') snapLog('hand', { result: 'snapped apart', gap: event.gap });
+    snap.fusion.hand(event);
+  }
 
   function onSnap(event) {
     state.vanished = !state.vanished;
@@ -265,6 +280,8 @@
       snap.sound = new SoundSnapDetector(data.sampleRate, {
         onEvent: (e) => {
           snap.lastSound = { ...e, wall: Date.now() };
+          const { verdict, jumpDb, brightness, durationMs } = e;
+          snapLog('sound', { verdict, jumpDb, brightness, durationMs });
           snap.fusion.sound(e);
         },
       });
@@ -310,6 +327,15 @@
     if (msg.hands.length) snap.handSeenAt = performance.now();
     snap.fusion.mode = snapMode();
     snap.hand.process(msg.hands, snap.handsSentAt);
+    // Log changes only: hand coming into / out of view, entering / leaving the snap pose.
+    const visible = msg.hands.length > 0;
+    if (visible !== snap.handVisible) snapLog('hand', { result: visible ? 'in view' : 'out of view' });
+    snap.handVisible = visible;
+    const inPose = snap.hand.lastPinch === snap.handsSentAt;
+    if (inPose !== snap.inPose && visible) {
+      snapLog('hand', { result: inPose ? 'snap pose' : 'left snap pose', closestGap: snap.hand.closestGap });
+    }
+    snap.inPose = inPose;
   }
 
   // ---- Compositor ----------------------------------------------------------------
@@ -981,6 +1007,16 @@
       lastSound: snap.lastSound && { ...snap.lastSound, secondsAgo: Math.round((Date.now() - snap.lastSound.wall) / 1000) },
       lastSnap: snap.lastSnap && { by: snap.lastSnap.by, secondsAgo: Math.round((Date.now() - snap.lastSnap.wall) / 1000) },
       count: snap.count,
+      // What Meet's mic processing is doing (noise suppression can soften clicks).
+      micSettings: (({ sampleRate, echoCancellation, noiseSuppression, autoGainControl } = {}) => ({
+        sampleRate,
+        echoCancellation,
+        noiseSuppression,
+        autoGainControl,
+      }))(snap.audioTrack?.getSettings?.()),
+      sensitivity: config.snapSensitivity,
+      configuredMode: config.snapMode,
+      log: snap.log,
     };
   }
 

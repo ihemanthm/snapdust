@@ -55,7 +55,9 @@ Snap your fingers to vanish; snap again to come back. Settings are in the popup.
 - **Hand only**: no microphone needed.
 - **Sensitivity**: how far above the room's noise a click must jump (24 dB at the low end, 12 dB at the high end).
 
-The popup shows what it hears ("Last click: snap-like ✓ / too dull / too long") and whether your hand is in view, to help tune it.
+In "sound + hand", a snap sound counts if your hand was in snap pose (thumb and middle finger pressed together) within the second before, or was seen snapping apart. The snap itself is often a blur on camera; the pose before it isn't.
+
+The popup shows what it hears ("Last click: snap-like ✓ / too dull / too long / too quiet") and whether your hand is in view. If snaps are missed, **Copy snap log** copies the last 40 sounds, hand poses and decisions (with why each snap was or wasn't accepted) plus Meet's mic processing settings.
 
 To hear snaps while you're muted in Meet, SnapDust listens to its own copy of Meet's mic, so your Mac's mic indicator may stay on while muted. Nothing is recorded or sent anywhere. If Meet closes the mic, SnapDust lets go too and "sound + hand" falls back to the hand alone.
 
