@@ -2,6 +2,8 @@
 
 Snap your fingers on a Meet call to turn to dust like in Infinity War, and snap again to come back like the Endgame return.
 
+Project page and privacy policy: https://ihemanthm.github.io/snapdust/
+
 ## Status
 
 | Phase | What | State |
@@ -11,7 +13,7 @@ Snap your fingers on a Meet call to turn to dust like in Infinity War, and snap 
 | 2 | WebGL dust dissolve | ✅ confirmed on a real call |
 | 3 | Gold return (the dust played backwards) | ✅ built, works on the test page; needs a real-call check |
 | 4 | Snap detection (sound + hand gesture) | ✅ built, works on the test page; needs a real snap |
-| 5 | Polish, settings, packaging | |
+| 5 | Reliability, packaging for the Chrome Web Store | ✅ 1.0.0 packaged (`npm run package`); see CHROMEWEBSTORE.md |
 
 ## Load it
 

@@ -1,12 +1,14 @@
 {
   "name": "meet-snap-dust",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Snap your fingers on Google Meet to turn to dust.",
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
     "serve": "python3 test/serve.py",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "package": "scripts/package.sh",
+    "art": "python3 scripts/make-art.py"
   },
   "devDependencies": {
     "@mediapipe/tasks-vision": "1.1.0"

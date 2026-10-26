@@ -4,3 +4,4 @@ node_modules/
 extension/vendor/
 # Local Claude Code preview config
 .claude/
+dist/

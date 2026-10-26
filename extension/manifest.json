@@ -1,14 +1,25 @@
 {
   "manifest_version": 3,
-  "name": "SnapDust for Meet",
-  "version": "0.3.0",
-  "description": "Snap to turn to dust on your Google Meet video, and snap back to return.",
+  "name": "SnapDust",
+  "version": "1.0.0",
+  "description": "Snap your fingers on a Google Meet call to crumble into dust, then snap again to come back.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
   "permissions": [
     "storage"
   ],
   "action": {
     "default_title": "SnapDust",
-    "default_popup": "popup/popup.html"
+    "default_popup": "popup/popup.html",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png",
+      "48": "icons/icon-48.png"
+    }
   },
   "background": {
     "service_worker": "background.js"
@@ -63,5 +74,6 @@
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
-  }
+  },
+  "homepage_url": "https://github.com/ihemanthm/snapdust"
 }

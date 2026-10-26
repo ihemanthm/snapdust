@@ -963,7 +963,7 @@
           'top',
         );
       }
-      if (config.badge) drawLabel(ctx, height, 'SnapDust phase 2', 'bottom');
+      if (config.badge) drawLabel(ctx, height, 'SnapDust', 'bottom');
     }
 
     // Fraction of the room seen without the person in front of it (0..1).
