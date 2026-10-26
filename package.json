@@ -1,16 +1,19 @@
 {
-  "name": "meet-snap-dust",
+  "name": "snapdust",
   "private": true,
   "version": "1.0.0",
-  "description": "Snap your fingers on Google Meet to turn to dust.",
+  "description": "Snap your fingers on a Google Meet call to crumble into dust, then snap again to come back.",
   "scripts": {
     "vendor": "node scripts/vendor.mjs",
-    "serve": "python3 test/serve.py",
     "test": "node --test test/*.test.mjs",
     "package": "scripts/package.sh",
     "art": "python3 scripts/make-art.py"
   },
   "devDependencies": {
     "@mediapipe/tasks-vision": "1.1.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ihemanthm/snapdust.git"
   }
 }

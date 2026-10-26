@@ -8,7 +8,7 @@
   const SEG_WIDTH = 256; // segmentation input width; height follows the camera's aspect ratio
   const DUST_SECONDS = 3.2; // the body's dissolve, plus up to 2.4 s for the last ash to fade
   const RETURN_SPEED = 1.5; // the return plays the dust backwards this much faster (~3.7 s)
-  const FADE_MS = 400; // fallback when WebGL2 is unavailable
+  const FADE_MS = 400; // plain fade, used when WebGL2 is unavailable
   // How quickly the room picture follows the live room, until a clean capture replaces it.
   const PLATE_LEARN_RATE = 0.08;
   // How quickly a spot counts as "known" (~1 s of seeing it without you in front).
@@ -30,10 +30,6 @@
   // Live config, pushed from the isolated-world bridge (popup -> storage -> bridge -> here).
   const config = {
     enabled: true,
-    effect: 'none',
-    badge: false,
-    mirror: false,
-    showMask: false,
     snapEnabled: true,
     snapMode: 'both', // both | sound | hand
     snapSensitivity: 0.5,
@@ -41,33 +37,19 @@
     segmenterUrl: null,
   };
 
-  // Runtime state driven by commands (popup buttons, keyboard shortcuts, later the snap).
+  // Runtime state driven by commands: popup buttons, keyboard shortcuts and snaps.
   const state = { vanished: false };
 
+  // What the popup shows.
   const status = {
-    installed: true,
-    intercepted: 0,
-    framesProcessed: 0,
-    pipeline: null,
-    segmenter: 'off',
-    maskFps: 0,
+    intercepted: 0, // camera streams taken over so far
+    segmenter: 'off', // off | loading | ready | error
     lastError: null,
     // The fields below describe the newest live camera stream.
-    streams: [], // e.g. ['1280×720', '640×480'] when Meet has the camera open more than once
-    maskLagFrames: 0, // video frames between sending a frame and using its mask
     background: 'none', // none | learning | capturing | captured
     backgroundKnown: 0, // fraction of the room seen without you in front of it
     vanished: false,
     phase: 'present', // present | dusting | gone | returning
-    renderMs: 0, // average time to process one frame
-  };
-
-  const FILTERS = {
-    none: 'none',
-    grayscale: 'grayscale(1)',
-    sepia: 'sepia(1)',
-    invert: 'invert(1)',
-    hue: 'hue-rotate(180deg) saturate(2)',
   };
 
   // Meet may open the camera more than once (pre-join preview, call, other resolutions).
@@ -78,10 +60,8 @@
   function reportStatus() {
     status.vanished = state.vanished;
     status.snap = snapStatus();
-    status.streams = [...compositors].filter((c) => c.width).map((c) => `${c.width}×${c.height}`);
     if (activeCompositor) {
       status.background = activeCompositor.background;
-      status.maskLagFrames = activeCompositor.maskLagFrames;
       status.phase = activeCompositor.phase;
     }
     window.dispatchEvent(new CustomEvent('snapdust:status', { detail: JSON.stringify(status) }));
@@ -124,8 +104,7 @@
     ready: false,
     busySince: 0,
     nextId: 1,
-    pending: new Map(), // request id -> { compositor, frameNo, generation }
-    masks: 0,
+    pending: new Map(), // request id -> { compositor, generation }
   };
 
   function ensureSegmenter() {
@@ -152,7 +131,7 @@
     const msg = event.data;
     if (msg.type === 'ready') {
       seg.ready = true;
-      status.segmenter = `ready (${msg.delegate})`;
+      status.segmenter = 'ready';
     } else if (msg.type === 'error') {
       seg.busySince = 0;
       status.segmenter = 'error';
@@ -161,14 +140,13 @@
       onHands(msg);
     } else if (msg.type === 'mask') {
       seg.busySince = 0;
-      seg.masks++;
       const request = seg.pending.get(msg.id);
       seg.pending.delete(msg.id);
       // Each mask goes back to the stream it was computed from, and only if that stream
       // hasn't changed size since.
       if (!request || request.generation !== request.compositor.generation) return;
       const mask = new ImageData(new Uint8ClampedArray(msg.buffer), msg.width, msg.height);
-      request.compositor.receiveMask(mask, request.frameNo);
+      request.compositor.receiveMask(mask);
     }
   }
 
@@ -181,7 +159,7 @@
     const bitmap = compositor.small.transferToImageBitmap();
     const id = seg.nextId++;
     seg.busySince = now;
-    seg.pending.set(id, { compositor, frameNo: compositor.frameNo, generation: compositor.generation });
+    seg.pending.set(id, { compositor, generation: compositor.generation });
     seg.port.postMessage({ type: 'segment', id, bitmap }, [bitmap]);
   }
 
@@ -193,39 +171,21 @@
   const HAND_EVERY = 2; // video frames between hand checks (~15 per second)
   const { SoundSnapDetector, HandSnapDetector, SnapFusion } = window.__SnapDustSnap;
 
-  const SNAP_LOG_SIZE = 40;
   const snap = {
     audioTrack: null, // our copy of Meet's mic track
     sound: null, // SoundSnapDetector, created at the mic's sample rate
     samples: null,
-    hand: new HandSnapDetector({ onEvent: onHandEvent }),
-    fusion: new SnapFusion({ mode: 'both', onSnap: onSnap, onDecision: (d) => snapLog('decision', d) }),
-    log: [], // recent sounds, hand poses and decisions, for "Copy snap log" in the popup
-    inPose: false,
-    handVisible: false,
+    hand: new HandSnapDetector({ onEvent: (e) => snap.fusion.hand(e) }),
+    fusion: new SnapFusion({ mode: 'both', onSnap: onSnap }),
     handsBusySince: 0,
     handsSentAt: 0,
     handsModel: 'off', // off | loading | ready | error
-    lastSound: null,
     lastSnap: null,
-    count: 0,
   };
-
-  function snapLog(kind, event) {
-    const { time, wall, ...rest } = event;
-    snap.log.push({ at: new Date().toISOString().slice(11, 23), kind, ...rest });
-    if (snap.log.length > SNAP_LOG_SIZE) snap.log.shift();
-  }
-
-  function onHandEvent(event) {
-    if (event.type === 'release') snapLog('hand', { result: 'snapped apart', gap: event.gap });
-    snap.fusion.hand(event);
-  }
 
   function onSnap(event) {
     state.vanished = !state.vanished;
-    snap.count++;
-    snap.lastSnap = { ...event, wall: Date.now() };
+    snap.lastSnap = { wall: Date.now() };
     reportStatus();
   }
 
@@ -278,12 +238,7 @@
     const n = data.numberOfFrames;
     if (!snap.sound || snap.sound.sampleRate !== data.sampleRate) {
       snap.sound = new SoundSnapDetector(data.sampleRate, {
-        onEvent: (e) => {
-          snap.lastSound = { ...e, wall: Date.now() };
-          const { verdict, jumpDb, brightness, durationMs } = e;
-          snapLog('sound', { verdict, jumpDb, brightness, durationMs });
-          snap.fusion.sound(e);
-        },
+        onEvent: (e) => snap.fusion.sound(e),
       });
     }
     snap.sound.setSensitivity(config.snapSensitivity);
@@ -327,15 +282,6 @@
     if (msg.hands.length) snap.handSeenAt = performance.now();
     snap.fusion.mode = snapMode();
     snap.hand.process(msg.hands, snap.handsSentAt);
-    // Log changes only: hand coming into / out of view, entering / leaving the snap pose.
-    const visible = msg.hands.length > 0;
-    if (visible !== snap.handVisible) snapLog('hand', { result: visible ? 'in view' : 'out of view' });
-    snap.handVisible = visible;
-    const inPose = snap.hand.lastPinch === snap.handsSentAt;
-    if (inPose !== snap.inPose && visible) {
-      snapLog('hand', { result: inPose ? 'snap pose' : 'left snap pose', closestGap: snap.hand.closestGap });
-    }
-    snap.inPose = inPose;
   }
 
   // ---- Compositor ----------------------------------------------------------------
@@ -457,7 +403,6 @@
       this.lastTime = 0;
       this.capture = null; // { startAt, endAt } in performance.now() time
       this.background = 'none'; // none | learning | capturing | captured
-      this.maskLagFrames = 0;
       // A stream opened while you're vanished (camera toggled off and on) starts out gone.
       this.phase = state.vanished ? 'gone' : 'present'; // present | dusting | gone | returning
       this.phaseStart = 0;
@@ -548,9 +493,8 @@
       this.capture = { startAt: now + CAPTURE_DELAY_MS, endAt: now + CAPTURE_DELAY_MS + CAPTURE_MAX_MS, fresh: true };
     }
 
-    receiveMask(mask, frameNo) {
+    receiveMask(mask) {
       this.newMask = mask;
-      this.newMaskFrame = frameNo;
     }
 
     render(source, width, height) {
@@ -577,10 +521,7 @@
     }
 
     drawInput(source) {
-      const { frameCtx: ctx, width, height } = this;
-      if (config.mirror) ctx.setTransform(-1, 0, 0, 1, width, 0);
-      ctx.drawImage(source, 0, 0, width, height);
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      this.frameCtx.drawImage(source, 0, 0, this.width, this.height);
     }
 
     get roomVisible() {
@@ -593,7 +534,6 @@
       this.newMask = null;
       if (config.vanishWho !== 'everyone') this.mainPerson = keepMainPerson(mask, this.mainPerson);
       this.latestMask = mask;
-      this.maskLagFrames = this.frameNo - this.newMaskFrame;
       const { width: mw, height: mh, data } = mask;
       if (this.mask.width !== mw || this.mask.height !== mh) {
         for (const canvas of [this.mask, this.rawMask, this.inverse, this.coverage, this.known]) {
@@ -897,8 +837,7 @@
     }
 
     compose(now) {
-      const { outCtx: ctx, scratchCtx, width, height } = this;
-      ctx.filter = FILTERS[config.effect] ?? 'none';
+      const { outCtx: ctx, scratchCtx, height } = this;
       ctx.drawImage(this.frame, 0, 0);
 
       // 1. Hide the live you behind the room picture. Until the first outline arrives, only a
@@ -907,7 +846,7 @@
       if (this.fadeAmount > 0 && !this.maskReady && !(this.captured || this.adopted)) {
         ctx.filter = 'blur(24px)';
         ctx.drawImage(this.frame, 0, 0);
-        ctx.filter = FILTERS[config.effect] ?? 'none';
+        ctx.filter = 'none';
       } else if (this.fadeAmount > 0 && this.plateReady) {
         const room = this.useFilled ? this.filled : this.plate;
         scratchCtx.globalCompositeOperation = 'copy';
@@ -933,24 +872,6 @@
         this.renderer.setMask(this.rawMask);
         ctx.drawImage(this.renderer.render('return', progress, DUST_SECONDS), 0, 0);
       }
-      ctx.filter = 'none';
-
-      if (config.showMask && this.maskReady) {
-        // Faint: the safety margin that gets replaced when you vanish. Solid: what the
-        // detector actually sees as you.
-        const tint = (source, colour) => {
-          scratchCtx.globalCompositeOperation = 'copy';
-          scratchCtx.drawImage(source, 0, 0, width, height);
-          scratchCtx.globalCompositeOperation = 'source-in';
-          scratchCtx.fillStyle = colour;
-          scratchCtx.fillRect(0, 0, width, height);
-          scratchCtx.globalCompositeOperation = 'source-over';
-          ctx.drawImage(this.scratch, 0, 0);
-        };
-        tint(this.maskBig, 'rgba(0, 180, 255, 0.15)');
-        tint(this.rawMask, 'rgba(0, 180, 255, 0.45)');
-      }
-
       if (this.capture) {
         const secondsLeft = Math.ceil((this.capture.startAt - now) / 1000);
         const known = Math.round((this.capture.known ?? 0) * 100);
@@ -960,10 +881,8 @@
           secondsLeft > 0
             ? `Step out of frame… ${secondsLeft}`
             : `Capturing room… ${known}%${known < 60 ? ' (step aside so I can see behind you)' : ''}`,
-          'top',
         );
       }
-      if (config.badge) drawLabel(ctx, height, 'SnapDust', 'bottom');
     }
 
     // Fraction of the room seen without the person in front of it (0..1).
@@ -977,12 +896,13 @@
     }
   }
 
-  function drawLabel(ctx, height, text, position) {
+  // A short message at the top of the video (seen by everyone, e.g. during room capture).
+  function drawLabel(ctx, height, text) {
     const size = Math.max(14, Math.round(height / 24));
     const pad = size / 2;
     ctx.font = `600 ${size}px system-ui, sans-serif`;
     const textWidth = ctx.measureText(text).width;
-    const top = position === 'top' ? pad : height - size * 2 - pad;
+    const top = pad;
     ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
     ctx.fillRect(pad, top, textWidth + pad * 2, size * 2);
     ctx.fillStyle = '#ffb347';
@@ -990,33 +910,16 @@
     ctx.fillText(text, pad * 2, top + size);
   }
 
-  let lastMaskCount = 0;
   setInterval(() => {
-    status.maskFps = seg.masks - lastMaskCount;
-    lastMaskCount = seg.masks;
     status.backgroundKnown = activeCompositor ? activeCompositor.measureCoverage() : 0;
   }, 1000);
 
   function snapStatus() {
-    const now = performance.now();
     return {
       mode: snapMode(),
-      mic: snap.audioTrack?.readyState === 'live',
       handsModel: snap.handsModel,
-      handInView: now - (snap.handSeenAt ?? -Infinity) < 1000,
-      lastSound: snap.lastSound && { ...snap.lastSound, secondsAgo: Math.round((Date.now() - snap.lastSound.wall) / 1000) },
-      lastSnap: snap.lastSnap && { by: snap.lastSnap.by, secondsAgo: Math.round((Date.now() - snap.lastSnap.wall) / 1000) },
-      count: snap.count,
-      // What Meet's mic processing is doing (noise suppression can soften clicks).
-      micSettings: (({ sampleRate, echoCancellation, noiseSuppression, autoGainControl } = {}) => ({
-        sampleRate,
-        echoCancellation,
-        noiseSuppression,
-        autoGainControl,
-      }))(snap.audioTrack?.getSettings?.()),
-      sensitivity: config.snapSensitivity,
-      configuredMode: config.snapMode,
-      log: snap.log,
+      handInView: performance.now() - (snap.handSeenAt ?? -Infinity) < 1000,
+      lastSnapSecondsAgo: snap.lastSnap ? Math.round((Date.now() - snap.lastSnap.wall) / 1000) : null,
     };
   }
 
@@ -1034,15 +937,12 @@
           return;
         }
         try {
-          const started = performance.now();
           const out = compositor.render(frame, frame.displayWidth, frame.displayHeight);
-          status.renderMs += (performance.now() - started - status.renderMs) * 0.05;
           const init = { timestamp: frame.timestamp };
           if (frame.duration != null) init.duration = frame.duration;
           const outFrame = new VideoFrame(out, init);
           frame.close();
           controller.enqueue(outFrame);
-          status.framesProcessed++;
         } catch (err) {
           status.lastError = String(err);
           controller.enqueue(frame);
@@ -1058,7 +958,6 @@
         console.warn(TAG, 'pipeline ended', err);
       });
 
-    status.pipeline = 'insertable-streams';
     return generator;
   }
 
@@ -1084,13 +983,11 @@
           canvas.height = height;
         }
         ctx.drawImage(config.enabled ? compositor.render(video, width, height) : video, 0, 0);
-        status.framesProcessed++;
       }
       video.requestVideoFrameCallback(onFrame);
     };
     video.requestVideoFrameCallback(onFrame);
 
-    status.pipeline = 'canvas';
     return canvas.captureStream(frameRate).getVideoTracks()[0];
   }
 
@@ -1135,7 +1032,6 @@
 
     status.intercepted++;
     reportStatus();
-    console.info(TAG, `camera intercepted via ${status.pipeline}`, inTrack.label);
 
     return new MediaStream([outTrack, ...stream.getAudioTracks()]);
   }
@@ -1162,5 +1058,4 @@
   };
 
   window.dispatchEvent(new CustomEvent('snapdust:hello'));
-  console.info(TAG, 'installed');
 })();

@@ -1,16 +1,12 @@
 const DEFAULTS = {
   enabled: true,
-  effect: 'none',
-  badge: false,
-  mirror: false,
-  showMask: false,
   snapEnabled: true,
   snapMode: 'both',
   snapSensitivity: 0.5,
   vanishWho: 'me',
 };
-const CHECKBOXES = ['enabled', 'badge', 'mirror', 'showMask', 'snapEnabled'];
-const VALUES = ['effect', 'snapMode', 'vanishWho'];
+const CHECKBOXES = ['enabled', 'snapEnabled'];
+const VALUES = ['snapMode', 'vanishWho'];
 const NUMBERS = ['snapSensitivity'];
 
 const controls = Object.fromEntries(
@@ -20,15 +16,11 @@ const vanishBtn = document.getElementById('vanish');
 const captureBtn = document.getElementById('capture');
 const statusEl = document.getElementById('status');
 const snapStatusEl = document.getElementById('snapStatus');
-const copyLogBtn = document.getElementById('copySnapLog');
-let lastSnapInfo = null;
-let config = { ...DEFAULTS };
 
 let tabId = null;
 
 async function loadSettings() {
   const cfg = await chrome.storage.local.get(DEFAULTS);
-  config = cfg;
   for (const id of CHECKBOXES) controls[id].checked = cfg[id];
   for (const id of [...VALUES, ...NUMBERS]) controls[id].value = cfg[id];
 }
@@ -37,7 +29,6 @@ async function saveSettings() {
   const cfg = Object.fromEntries(CHECKBOXES.map((id) => [id, controls[id].checked]));
   for (const id of VALUES) cfg[id] = controls[id].value;
   for (const id of NUMBERS) cfg[id] = Number(controls[id].value);
-  config = cfg;
   await chrome.storage.local.set(cfg);
 }
 
@@ -51,58 +42,52 @@ async function send(message) {
   return chrome.tabs.sendMessage(tabId, message);
 }
 
-const BACKGROUND_LABELS = {
-  none: 'not started',
-  learning: 'learning while you move',
-  capturing: 'capturing…',
-  captured: 'captured',
-};
-
-function render(s) {
-  vanishBtn.disabled = captureBtn.disabled = !s || s.intercepted === 0;
-  if (!s) return showStatus('Extension loaded, but the page hook has not reported yet. Reload the Meet tab.', 'bad');
-  if (s.intercepted === 0) return showStatus('Hook installed.\nWaiting for Meet to open the camera…');
-
-  vanishBtn.textContent = s.vanished ? 'Reappear' : 'Vanish';
-  const known = Math.round(s.backgroundKnown * 100);
-  const streams = s.streams?.length > 1 ? ` — ${s.streams.length} streams: ${s.streams.join(', ')}` : '';
-  const lines = [
-    `Camera intercepted ✓ (${s.pipeline})${streams}`,
-    `Person detection: ${s.segmenter}${s.maskFps ? `, ${s.maskFps} fps` : ''}`,
-    `Room picture: ${BACKGROUND_LABELS[s.background] ?? s.background}, ${known}% known`,
-  ];
-  if (s.background !== 'captured' && known < 90) {
-    lines.push('Tip: capture the empty room so nothing of you is left behind.');
+// One plain sentence about what SnapDust is doing, and what to do next.
+function describe(s) {
+  if (!controls.enabled.checked) return ['SnapDust is off. Turn it on under More.'];
+  if (s.intercepted === 0) return ['Turn your camera on in Meet.'];
+  if (s.segmenter === 'error') return ["Couldn't start. Reload the Meet tab and try again.", 'bad'];
+  if (s.segmenter !== 'ready') return ['Getting ready…'];
+  if (s.background === 'capturing') return ['Capturing the room. Step aside so it can see behind you.'];
+  const snapping = s.snap?.mode && s.snap.mode !== 'off';
+  if (s.vanished) return [snapping ? "You're gone. Snap to come back." : "You're gone."];
+  if (s.background !== 'captured' && s.backgroundKnown < 0.9) {
+    return ['Ready. For the cleanest vanish, capture the empty room first.'];
   }
-  if (s.lastError) lines.push(`Last error: ${s.lastError}`);
-  showStatus(lines.join('\n'), s.lastError || s.segmenter === 'error' ? 'bad' : 'ok');
-  renderSnap(s.snap);
+  return [snapping ? 'Ready. Snap to vanish.' : 'Ready.', 'ok'];
 }
 
-const MODE_LABELS = { both: 'sound + hand', sound: 'sound only', hand: 'hand only' };
+const MODE_HINTS = {
+  both: 'Hold your hand up, thumb and middle finger together, and snap.',
+  sound: 'Snap near your mic. Sharp clicks like typing can set it off.',
+  hand: 'Hold your hand up, thumb and middle finger together, and snap.',
+};
 
-// What snap detection hears and sees right now, to help tune it.
 function renderSnap(snap) {
-  lastSnapInfo = snap;
-  if (!snap) return (snapStatusEl.textContent = '');
+  if (!controls.snapEnabled.checked) return (snapStatusEl.textContent = '');
+  if (!snap) return (snapStatusEl.textContent = MODE_HINTS[controls.snapMode.value]);
   if (snap.mode === 'off') {
-    snapStatusEl.textContent = controls.snapEnabled.checked
-      ? 'No mic from Meet yet, so "sound only" can\'t listen. Unmute once, or pick another mode.'
-      : 'Off. Use the buttons or shortcuts.';
-    return;
+    return (snapStatusEl.textContent = "Meet's microphone is off, so sound can't be used. Pick another mode.");
   }
-  const lines = [`Listening for: ${MODE_LABELS[snap.mode]}`];
-  if (config.snapMode === 'both' && snap.mode === 'hand') lines[0] += ' (Meet has no mic open)';
+  const lines = [MODE_HINTS[snap.mode]];
+  if (controls.snapMode.value === 'both' && snap.mode === 'hand') lines.push("Meet's mic is off: using your hand only.");
   if (snap.mode !== 'sound') {
-    const hands = { off: 'starting…', loading: 'loading…', ready: '', error: 'failed to load' }[snap.handsModel];
-    lines.push(`Hand: ${hands || (snap.handInView ? 'in view ✓' : 'not in view')}`);
+    if (snap.handsModel === 'error') lines.push("Hand tracking couldn't start.");
+    else if (snap.handsModel === 'ready') lines.push(snap.handInView ? 'Hand in view ✓' : 'Hand not in view.');
   }
-  if (snap.mode !== 'hand' && snap.lastSound) {
-    const l = snap.lastSound;
-    lines.push(`Last click: ${l.snap ? 'snap-like ✓' : l.verdict}, ${l.secondsAgo}s ago`);
-  }
-  if (snap.lastSnap) lines.push(`Last snap: ${snap.lastSnap.secondsAgo}s ago (${snap.lastSnap.by})`);
   snapStatusEl.textContent = lines.join('\n');
+}
+
+function render(s) {
+  const ready = !!s && s.intercepted > 0 && controls.enabled.checked;
+  vanishBtn.disabled = captureBtn.disabled = !ready;
+  if (!s) {
+    showStatus('Reload this Meet tab to start SnapDust.', 'bad');
+    return renderSnap(null);
+  }
+  vanishBtn.textContent = s.vanished ? 'Come back' : 'Vanish';
+  showStatus(...describe(s));
+  renderSnap(s.snap);
 }
 
 async function refreshStatus() {
@@ -111,7 +96,8 @@ async function refreshStatus() {
     render(response?.status);
   } catch {
     vanishBtn.disabled = captureBtn.disabled = true;
-    showStatus('Open a Google Meet tab (reload it if it was open before installing).', 'bad');
+    showStatus('Open a Google Meet call to use SnapDust.');
+    renderSnap(null);
   }
 }
 
@@ -119,8 +105,8 @@ async function command(name) {
   try {
     const response = await send({ type: 'snapdust:command', command: name });
     render(response?.status);
-  } catch (err) {
-    showStatus(`Could not reach the Meet tab: ${err}`, 'bad');
+  } catch {
+    showStatus('Reload this Meet tab to start SnapDust.', 'bad');
   }
 }
 
@@ -128,30 +114,22 @@ try {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabId = tab?.id ?? null;
   await loadSettings();
-} catch (err) {
-  showStatus(`Could not load settings: ${err}`, 'bad');
+} catch {
+  showStatus("Couldn't load your settings.", 'bad');
 }
 
 for (const el of Object.values(controls)) {
   el.addEventListener(el.type === 'range' ? 'input' : 'change', async () => {
     try {
       await saveSettings();
-    } catch (err) {
-      showStatus(`Could not save settings: ${err}`, 'bad');
+      refreshStatus();
+    } catch {
+      showStatus("Couldn't save your settings.", 'bad');
     }
   });
 }
 
 vanishBtn.addEventListener('click', () => command('toggle-vanish'));
-copyLogBtn.addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(JSON.stringify(lastSnapInfo, null, 2));
-    copyLogBtn.textContent = 'Copied ✓ — paste it to Claude';
-  } catch (err) {
-    copyLogBtn.textContent = `Could not copy: ${err.message}`;
-  }
-  setTimeout(() => (copyLogBtn.textContent = 'Copy snap log'), 2500);
-});
 captureBtn.addEventListener('click', () => command('capture-background'));
 
 await refreshStatus();

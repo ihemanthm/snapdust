@@ -98,12 +98,6 @@
         const before = Math.max(this.history.at(-2)?.high ?? 0, this.history.at(-3)?.high ?? 0);
         const jump = db(high / this.floor);
         const sudden = high > before * 8 && high > 1e-6; // far above what was there 5 ms ago
-        // Sharp but not loud enough: reported (at most every 300 ms) so the log shows whether
-        // a higher sensitivity would have caught it.
-        if (sudden && jump < this.jumpDb && jump >= this.jumpDb - 10 && this.time - (this.lastQuiet ?? -1e9) > 300) {
-          this.lastQuiet = this.time;
-          this.onEvent({ time: this.time, snap: false, verdict: 'too quiet', jumpDb: Math.round(jump) });
-        }
         if (jump >= this.jumpDb && sudden) {
           const recent = this.history.slice(0, -1);
           const mean = (key) => recent.reduce((sum, h) => sum + h[key], 0) / Math.max(1, recent.length);
@@ -170,13 +164,11 @@
       this.tracks = []; // per hand slot: { lastPinch, pinchTipToWrist }
       this.lastSeen = -Infinity;
       this.lastPinch = -Infinity;
-      this.closestGap = Infinity; // smallest thumb-middle gap in the latest frame, for the log
     }
 
     // hands: array of 21 [x, y] points per hand (image coordinates); timeMs: when the frame was taken.
     process(hands, timeMs) {
       if (hands.length) this.lastSeen = timeMs;
-      this.closestGap = Infinity;
       hands.forEach((points, i) => {
         const track = (this.tracks[i] ??= { lastPinch: -Infinity, pinchTipToWrist: 0 });
         const size = dist(points[WRIST], points[MIDDLE_KNUCKLE]);
@@ -184,7 +176,6 @@
         const gap = dist(points[THUMB_TIP], points[MIDDLE_TIP]) / size;
         const tipToWrist = dist(points[MIDDLE_TIP], points[WRIST]) / size;
         const rounded = Math.round(gap * 100) / 100;
-        this.closestGap = Math.min(this.closestGap, rounded);
         if (gap < PINCHED) {
           track.lastPinch = timeMs;
           track.pinchTipToWrist = tipToWrist;
@@ -212,12 +203,11 @@
   // mode: 'both' (sound and hand must agree) | 'sound' | 'hand'.
   // In 'both', a snap sound fires if the hand was seen snapping apart OR holding the ready pose
   // just before: the snap itself is a blur the tracker often misses, the pose is not.
-  // onDecision (optional) reports every snap sound and what was made of it, for the log.
   class SnapFusion {
     constructor({ mode = 'both', onSnap, onDecision } = {}) {
       this.mode = mode;
       this.onSnap = onSnap ?? (() => {});
-      this.onDecision = onDecision ?? (() => {});
+      this.onDecision = onDecision ?? (() => {}); // optional: what was made of each snap sound
       this.lastSound = null;
       this.lastRelease = null;
       this.lastPose = -Infinity;

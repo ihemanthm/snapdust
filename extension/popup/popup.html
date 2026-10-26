@@ -6,25 +6,27 @@
     <link rel="stylesheet" href="popup.css" />
   </head>
   <body>
-    <h1>SnapDust</h1>
+    <header>
+      <img src="../icons/icon-32.png" alt="" width="20" height="20" />
+      <h1>SnapDust</h1>
+    </header>
+
+    <p id="status">Checking…</p>
 
     <div class="buttons">
       <button id="vanish" class="primary">Vanish</button>
       <button id="capture">Capture empty room</button>
     </div>
-    <p class="hint">Shortcuts: <kbd>⌥⇧V</kbd> vanish/reappear, <kbd>⌥⇧B</kbd> capture room.</p>
-
-    <section id="status">Checking…</section>
 
     <section class="snap">
       <label class="row">
         <input type="checkbox" id="snapEnabled" />
-        <strong>Snap to vanish / come back</strong>
+        Snap to vanish and come back
       </label>
       <label class="row">
         Detect by
         <select id="snapMode">
-          <option value="both">Sound + hand (fewest mistakes)</option>
+          <option value="both">Sound + hand</option>
           <option value="sound">Sound only</option>
           <option value="hand">Hand only (no mic)</option>
         </select>
@@ -33,18 +35,11 @@
         Sensitivity
         <input type="range" id="snapSensitivity" min="0" max="1" step="0.05" />
       </label>
-      <div id="snapStatus" class="hint"></div>
-      <button id="copySnapLog" class="link">Copy snap log</button>
+      <p id="snapStatus" class="hint"></p>
     </section>
 
     <details>
-      <summary>Settings</summary>
-
-      <label class="row">
-        <input type="checkbox" id="enabled" />
-        Process my camera
-      </label>
-
+      <summary>More</summary>
       <label class="row">
         Who vanishes
         <select id="vanishWho">
@@ -52,32 +47,11 @@
           <option value="everyone">Everyone in frame</option>
         </select>
       </label>
-
       <label class="row">
-        <input type="checkbox" id="mirror" />
-        Flip my video for others
+        <input type="checkbox" id="enabled" />
+        SnapDust on
       </label>
-
-      <label class="row">
-        <input type="checkbox" id="showMask" />
-        Show detection outline (debug)
-      </label>
-
-      <label class="row">
-        <input type="checkbox" id="badge" />
-        Show "SnapDust" label on video
-      </label>
-
-      <label class="row">
-        Colour filter
-        <select id="effect">
-          <option value="none">None</option>
-          <option value="grayscale">Grayscale</option>
-          <option value="sepia">Sepia</option>
-          <option value="invert">Invert</option>
-          <option value="hue">Hue shift</option>
-        </select>
-      </label>
+      <p class="hint">Shortcuts: <kbd>⌥⇧V</kbd> vanish / come back, <kbd>⌥⇧B</kbd> capture room.</p>
     </details>
 
     <script type="module" src="popup.js"></script>

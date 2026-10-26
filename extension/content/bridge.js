@@ -1,10 +1,6 @@
 // Isolated-world content script: relays settings and commands into the page and status back out.
 const DEFAULTS = {
   enabled: true,
-  effect: 'none',
-  badge: false,
-  mirror: false,
-  showMask: false,
   snapEnabled: true,
   snapMode: 'both',
   snapSensitivity: 0.5,

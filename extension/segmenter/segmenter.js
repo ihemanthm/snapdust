@@ -21,7 +21,7 @@ for (const level of ['log', 'warn', 'error']) {
     typeof args[0] === 'string' && MEDIAPIPE_CHATTER.test(args[0]) ? console.debug(...args) : original(...args);
 }
 
-const ALLOWED_PARENTS = ['https://meet.google.com', 'http://127.0.0.1:8765', 'http://localhost:8765'];
+const ALLOWED_PARENTS = ['https://meet.google.com'];
 const WASM_BASE = new URL('../vendor/mediapipe/wasm', import.meta.url).href;
 const SEGMENTER_MODEL = new URL('../vendor/mediapipe/models/selfie_segmenter.tflite', import.meta.url).href;
 const HAND_MODEL = new URL('../vendor/mediapipe/models/hand_landmarker.task', import.meta.url).href;

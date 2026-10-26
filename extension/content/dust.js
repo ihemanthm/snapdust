@@ -1,7 +1,7 @@
 // WebGL2 renderer for the two effects, drawn on top of the room picture:
-//   dust:   the body flakes away into grey-brown ash that drifts off (Infinity War snap)
+//   dust:   the body flakes away into grey-brown ash that drifts off
 //   return: the same dust played backwards, glowing gold: flakes fly back along the paths
-//           they left on and the body rebuilds, last part gone first back (Endgame return)
+//           they left on and the body rebuilds, last part gone first back
 //
 // Both use one "dissolve field": a value per pixel from 0 to 1, made of a sweep across the
 // body plus noise. As progress passes a pixel's value, that pixel turns to ash. Particles are
