@@ -254,6 +254,18 @@
       this.fieldSet = true;
     }
 
+    // Releases the GPU context now instead of whenever the garbage collector gets to it;
+    // Chrome only allows a handful of live WebGL contexts per page.
+    dispose() {
+      const { gl } = this;
+      gl.deleteTexture(this.bodyTex);
+      gl.deleteTexture(this.maskTex);
+      gl.deleteProgram(this.body.program);
+      gl.deleteProgram(this.particles.program);
+      gl.deleteVertexArray(this.vao);
+      gl.getExtension('WEBGL_lose_context')?.loseContext();
+    }
+
     // mode: 'dust' | 'return'; progress: 0 -> 1 over `duration` seconds as the body dissolves,
     // up to 1 + maxLife / duration once the last ash is gone. The return passes the same
     // progress running backwards. Returns the canvas to draw over the frame.

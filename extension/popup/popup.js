@@ -7,9 +7,10 @@ const DEFAULTS = {
   snapEnabled: true,
   snapMode: 'both',
   snapSensitivity: 0.5,
+  vanishWho: 'me',
 };
 const CHECKBOXES = ['enabled', 'badge', 'mirror', 'showMask', 'snapEnabled'];
-const VALUES = ['effect', 'snapMode'];
+const VALUES = ['effect', 'snapMode', 'vanishWho'];
 const NUMBERS = ['snapSensitivity'];
 
 const controls = Object.fromEntries(

@@ -8,6 +8,7 @@ const DEFAULTS = {
   snapEnabled: true,
   snapMode: 'both',
   snapSensitivity: 0.5,
+  vanishWho: 'me',
 };
 const SEGMENTER_URL = chrome.runtime.getURL('segmenter/segmenter.html');
 let lastStatus = null;

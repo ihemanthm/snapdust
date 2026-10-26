@@ -38,6 +38,10 @@ Dark frames (the camera warming up, lights off) are ignored, so the room picture
 
 If Meet has the camera open more than once (e.g. preview + call), the popup shows each stream's size. Each stream gets its own outline and room picture; captures apply to all of them.
 
+Turning your camera off and on (or Meet changing resolution) keeps the captured room, and if you were vanished you stay vanished, with no dust replay.
+
+**Others in frame:** by default only you vanish: the largest person in view (on a webcam, whoever is nearest), plus anything touching you, such as a raised hand. Anyone else stays visible. Two people touching or overlapping in the picture count as one. Settings → "Who vanishes" → "Everyone in frame" changes this.
+
 Without a capture, SnapDust still learns the room as you move around. The popup shows how much of the room it has seen ("% known"); any part it has never seen without you in front is filled with a blur of the surrounding room.
 
 **Settings (in the popup):** "Show detection outline" tints what the model thinks is you, which is useful for checking detection in your lighting. "Flip my video for others" mirrors what other people see.

@@ -29,7 +29,8 @@
       // Fake camera: a room with a person-like figure that sways, and steps out when `fake.away` is set.
       // `speed` scales how fast the person sways; `brightness` mimics camera auto-exposure;
       // `dark` mimics a webcam's black warm-up frames.
-      const fake = { away: false, speed: 1, brightness: 1, dark: false, nextCrop: false };
+      // `second`: another, smaller person standing still at the left, behind the main one.
+      const fake = { away: false, speed: 1, brightness: 1, dark: false, nextCrop: false, second: false };
       // Person: MediaPipe's test portrait, cut out of its own background by the module script
       // below, so the "empty room" behind the person is known exactly.
       let cutout = null;
@@ -47,6 +48,19 @@
         ctx.fillStyle = '#d62828';
         ctx.fillRect(480, 50, 30, 40);
       }
+      function drawSecond(ctx, time = performance.now()) {
+        if (!fake.second || !cutout) return;
+        // Smaller (further back), at the left, ~28 px clear of the main person standing still.
+        const h = 190;
+        const w = (cutout.width / cutout.height) * h;
+        const x = 72 + Math.sin(time / 700) * 8; // sways a little, like a real person
+        ctx.drawImage(cutout, x - w / 2, 360 - h, w, h);
+      }
+      // What the camera sees with the main person gone.
+      function drawExpected(ctx, time) {
+        drawRoom(ctx);
+        drawSecond(ctx, time);
+      }
       let phase = 0;
       function drawScene() {
         phase += fake.speed / 30;
@@ -58,6 +72,7 @@
         sctx.filter = fake.brightness === 1 ? 'none' : `brightness(${fake.brightness})`;
         drawRoom(sctx);
         sctx.filter = 'none';
+        drawSecond(sctx);
         if (fake.away) return;
         const cx = 320 + Math.sin(phase) * 30 * Math.max(1, fake.speed);
         if (cutout) {
@@ -254,10 +269,14 @@
         const room = document.createElement('canvas');
         room.width = 640;
         room.height = 360;
-        const rctx = room.getContext('2d');
-        rctx.filter = fake.brightness === 1 ? 'none' : `brightness(${fake.brightness})`;
-        drawRoom(rctx);
-        const expected = rctx.getImageData(0, 0, 640, 360).data;
+        const rctx = room.getContext('2d', { willReadFrequently: true });
+        // Redrawn per sample: a swaying bystander is part of what's expected. The output lags
+        // the camera by about a frame, so it is compared against the scene ~40 ms earlier.
+        const expectedNow = () => {
+          rctx.filter = fake.brightness === 1 ? 'none' : `brightness(${fake.brightness})`;
+          drawExpected(rctx, performance.now() - 40);
+          return rctx.getImageData(0, 0, 640, 360).data;
+        };
         const c = document.createElement('canvas');
         c.width = 640;
         c.height = 360;
@@ -267,6 +286,7 @@
         while (performance.now() < end) {
           ctx.drawImage(out, 0, 0, 640, 360);
           const got = ctx.getImageData(0, 0, 640, 360).data;
+          const expected = expectedNow();
           let frameGhost = 0;
           for (let i = 0; i < got.length; i += 4) {
             const d = (Math.abs(got[i] - expected[i]) + Math.abs(got[i + 1] - expected[i + 1]) + Math.abs(got[i + 2] - expected[i + 2])) / 3;
@@ -401,6 +421,87 @@
           playSnap();
           await wait(500);
           r.bothModeSoundAlone = { phase: getStatus().phase, snaps: getStatus().snap.count };
+          return r;
+        },
+        // Camera off/on many times (as when toggling video in Meet), vanishing each time, so
+        // every stream builds its own dust renderer. Then one last vanish must still work.
+        async toggle({ rounds = 20 } = {}) {
+          const video = document.createElement('video');
+          video.muted = true;
+          document.body.append(video);
+          const r = { rounds: [] };
+          for (let i = 0; i < rounds; i++) {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+            video.srcObject = stream;
+            await wait(900);
+            sendCommand('vanish');
+            await wait(500);
+            const phase = getStatus().phase;
+            sendCommand('appear');
+            await wait(500);
+            stream.getTracks().forEach((t) => t.stop());
+            r.rounds.push(phase);
+          }
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          out.srcObject = stream;
+          await wait(900);
+          sendCommand('vanish');
+          await wait(1200);
+          r.finalPhase = getStatus().phase;
+          r.finalError = getStatus().lastError;
+          r.streamsOpen = getStatus().streams.length;
+          sendCommand('appear');
+          return r;
+        },
+        // Vanish, then turn the camera off and on again (Meet opens a new stream): you must
+        // stay gone, with the captured room, from the new stream's first frames.
+        async offOn() {
+          await startCamera();
+          fake.away = true;
+          const r = { capture: await capture() };
+          fake.away = false;
+          await wait(1500);
+          sendCommand('vanish');
+          await wait(6200);
+          r.before = { phase: getStatus().phase, ghost: (await measureGhost(500)).ghostPct };
+          window.testStream.getTracks().forEach((t) => t.stop());
+          await wait(500);
+          const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          out.srcObject = stream;
+          window.testStream = stream;
+          await wait(150);
+          r.firstMoments = await measureGhost(600);
+          r.afterReopen = { phase: getStatus().phase, background: getStatus().background, streams: getStatus().streams };
+          await wait(1500);
+          r.later = await measureGhost(1500);
+          sendCommand('appear');
+          await wait(4500);
+          r.cameBack = getStatus().phase;
+          return r;
+        },
+        // Someone else in frame: only the main (largest) person should vanish.
+        async twoPeople() {
+          fake.second = true;
+          fake.speed = 0; // main person stands still, so the gap between them stays clear
+          await startCamera();
+          fake.away = true;
+          const r = { capture: await capture() };
+          fake.away = false;
+          await wait(1500);
+          sendCommand('vanish');
+          await wait(6200);
+          r.phase = getStatus().phase;
+          r.ghost = await measureGhost(2000);
+          r.secondPersonFace = samplePixel(72, 215);
+          r.wallThere = [201, 194, 180];
+          const setWho = (who) =>
+            window.dispatchEvent(new CustomEvent('snapdust:config', { detail: JSON.stringify({ vanishWho: who }) }));
+          setWho('everyone');
+          await wait(1500);
+          r.everyoneMode = await measureGhost(1500);
+          setWho('me');
+          await wait(1500);
+          r.backToJustMe = await measureGhost(1500);
           return r;
         },
         // Proper capture, then a full vanish and return.
